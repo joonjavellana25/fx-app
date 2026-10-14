@@ -1,0 +1,185 @@
+---
+import "../styles/global.css";
+import {
+  formatMoney,
+  FrankfurterError,
+  getRate,
+  listCurrencies,
+  type Currency,
+} from "../lib/frankfurter";
+
+export const prerender = false;
+
+const DEFAULT_FROM = "USD";
+const DEFAULT_TO = "PHP";
+
+let currencies: Currency[] = [];
+let amount = "100";
+let from = DEFAULT_FROM;
+let to = DEFAULT_TO;
+let error: string | null = null;
+let converted: {
+  amountLabel: string;
+  resultLabel: string;
+  rateLabel: string;
+  date: string;
+} | null = null;
+
+try {
+  currencies = await listCurrencies();
+} catch (err) {
+  error =
+    err instanceof FrankfurterError
+      ? err.message
+      : "Could not load currencies. Check your internet connection and try again.";
+}
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+  amount = String(form.get("amount") ?? "").trim();
+  from = String(form.get("from") ?? DEFAULT_FROM).toUpperCase();
+  to = String(form.get("to") ?? DEFAULT_TO).toUpperCase();
+
+  const numericAmount = Number(amount);
+  if (!Number.isFinite(numericAmount) || numericAmount < 0) {
+    error = "Enter a valid amount of 0 or more.";
+  } else if (!from || !to) {
+    error = "Choose both a from and to currency.";
+  } else {
+    try {
+      const quote = await getRate(from, to);
+      const result = numericAmount * quote.rate;
+      converted = {
+        amountLabel: formatMoney(numericAmount, from),
+        resultLabel: formatMoney(result, to),
+        rateLabel: `1 ${quote.base} = ${quote.rate} ${quote.quote}`,
+        date: quote.date,
+      };
+      error = null;
+    } catch (err) {
+      converted = null;
+      error =
+        err instanceof FrankfurterError
+          ? err.message
+          : "Could not fetch the exchange rate. Check your internet connection and try again.";
+    }
+  }
+}
+
+const fromValue = currencies.some((c) => c.iso_code === from) ? from : DEFAULT_FROM;
+const toValue = currencies.some((c) => c.iso_code === to) ? to : DEFAULT_TO;
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>fx-app — currency converter</title>
+  </head>
+  <body>
+    <main>
+      <div class="card">
+        <h1>Currency converter</h1>
+        <p class="lede">
+          Convert an amount to any supported currency using live Frankfurter rates.
+        </p>
+
+        <form method="post">
+          <label>
+            Amount
+            <input
+              type="number"
+              name="amount"
+              min="0"
+              step="any"
+              required
+              value={amount}
+            />
+          </label>
+
+          <div class="pair">
+            <label>
+              From
+              <select id="from" name="from" required>
+                {
+                  currencies.map((currency) => (
+                    <option
+                      value={currency.iso_code}
+                      selected={currency.iso_code === fromValue}
+                    >
+                      {currency.iso_code} — {currency.name}
+                    </option>
+                  ))
+                }
+              </select>
+            </label>
+
+            <button class="swap" type="button" id="swap" aria-label="Swap currencies">
+              ⇄
+            </button>
+
+            <label>
+              To
+              <select id="to" name="to" required>
+                {
+                  currencies.map((currency) => (
+                    <option
+                      value={currency.iso_code}
+                      selected={currency.iso_code === toValue}
+                    >
+                      {currency.iso_code} — {currency.name}
+                    </option>
+                  ))
+                }
+              </select>
+            </label>
+          </div>
+
+          <div class="actions">
+            <button type="submit">Convert</button>
+          </div>
+        </form>
+
+        {
+          error && (
+            <div class="error" role="alert">
+              {error}
+            </div>
+          )
+        }
+
+        {
+          converted && (
+            <div class="result">
+              <span class="meta">{converted.amountLabel} equals</span>
+              <strong>{converted.resultLabel}</strong>
+              <p class="meta">
+                Rate {converted.rateLabel} · date {converted.date}
+              </p>
+            </div>
+          )
+        }
+
+        <p class="note">
+          Rates are public reference data from Frankfurter, not bank quotes. This app needs
+          internet access to convert.
+        </p>
+      </div>
+    </main>
+
+    <script is:inline>
+      const fromSelect = document.getElementById("from");
+      const toSelect = document.getElementById("to");
+      const swap = document.getElementById("swap");
+
+      swap?.addEventListener("click", () => {
+        if (!(fromSelect instanceof HTMLSelectElement) || !(toSelect instanceof HTMLSelectElement)) {
+          return;
+        }
+        const previousFrom = fromSelect.value;
+        fromSelect.value = toSelect.value;
+        toSelect.value = previousFrom;
+      });
+    </script>
+  </body>
+</html>
